@@ -1,0 +1,139 @@
+# Ingest Service
+
+Accepts patient events over HTTP, processes each one asynchronously (~5 s, simulated
+external call), and persists the outcome in a single MongoDB collection.
+
+> Draft. This file currently holds the design decisions taken before implementation.
+> Setup and verification instructions are added as the code lands.
+
+## From operating conditions to design
+
+| Condition | What it forces |
+| --- | --- |
+| 1000 events/min, ~5 s each | ~83 events in flight at steady state (Little's law: `16.67/s x 5 s`). The work is waiting on I/O, not CPU, so a single Node process with bounded concurrency covers it; worker replicas exist for backlog headroom and availability during deploys, not for raw throughput. Concurrency must be capped and configurable — an unbounded drain of a backlog would hit the external system with thousands of simultaneous calls. |
+| Senders time out, retry, resend | Duplicates are the normal case, not the exception. Identity has to be derived from content, and uniqueness enforced by the database, not by a read-then-write in application code. |
+| No ordering guarantee; per-patient state is order-dependent | Arrival order must not influence the result. Ordering is applied by `ts` (clinical time), never by `receivedAt` (our clock). |
+| Never silently lost, never counted twice | The event must be durable before the response is sent. Failures are allowed; silent failures are not — every failure reaches a queryable terminal state with attempt count and last error, and the system must be inspectable enough to assert that nothing is missing. |
+| Processes are killed mid-work | In-flight work must be recoverable by another process without human intervention. |
+| Sender needs an immediate answer | No processing in the request path. `POST /events` validates, persists, returns 202. |
+
+## Decisions
+
+### 1. The MongoDB collection is the queue
+
+Events are claimed straight from the collection with an atomic `findOneAndUpdate`, under a
+lease. No broker.
+
+Why: the event and its processing state live in one document, so claiming, retrying and
+recording the outcome are single-document atomic operations. Introducing a broker would add
+the classic dual-write gap — write to Mongo, fail to publish to the broker, event exists but
+is never processed — and solving that properly means an outbox, which is more moving parts
+than this volume justifies.
+
+Trade-off accepted: workers poll instead of receiving a push, and the collection carries
+index write pressure from the claim loop. At 1000/min both are negligible. This is the
+decision to revisit first at ~10x the volume or when more than one consumer needs the stream.
+
+### 2. Idempotency key = canonical hash of the payload
+
+`sha256` over the canonical form of `(patientId, type, ts, data)`. An `Idempotency-Key`
+request header, when a sender provides one, is used instead. A unique index on the key is
+what enforces the guarantee; a duplicate-key error on insert means "already seen" and is
+answered with 202, same as the first time.
+
+Two details that are easy to get wrong and silently break idempotency:
+JSON object key order is not stable, so `data` is serialised with keys sorted recursively;
+and `2026-01-01T10:00:00Z`, `...10:00:00.000Z` and `...+00:00` are the same instant with three
+different string forms, so `ts` is normalised to a `Date` before hashing.
+
+Trade-off accepted: two genuinely distinct events with identical `patientId`, `type`, `ts`
+and `data` collapse into one. Without an identifier from the sender, that case is
+indistinguishable from a retry — no design can separate them. Documented, not solved.
+
+### 3. Patient state is derived, not stored
+
+There is no patient-state document. The state is a fold over that patient's processed events
+ordered by `ts`, computed on read.
+
+Why: it keeps the single-collection constraint literally; it removes any possibility of the
+stored state disagreeing with the events; and it makes the late-event problem disappear
+instead of requiring reconciliation logic. An event that arrives with a `ts` older than
+events already applied simply takes its place in the ordering on the next read.
+
+Trade-off accepted: read cost grows with the number of events per patient. With more time:
+a periodic snapshot per patient, folding only the events after it.
+
+### 4. Per-event processing is independent; ordering lives in the fold
+
+The slow external call enriches a single event and does not read the patient's current state.
+The order-dependence required by the operating conditions lives in how those per-event
+results are applied to produce the state.
+
+Why: a late event then costs a re-fold, not a reprocess. If processing depended on the
+current state, one event arriving late would invalidate the stored result of every later
+event for that patient, and recomputing would mean calling the external system again — 5 s
+each.
+
+This is the main assumption in the design and the thing that would have to change first if
+the external system turned out to be stateful per patient.
+
+### 5. Lease, not lock
+
+A claimed event carries `lockedUntil`. A worker that dies leaves the event claimed, but the
+lease expires and another worker reclaims it.
+
+The lease duration is a trade-off in both directions. Too short and a worker that is alive
+but slow (GC pause, external system taking longer than expected) has its event taken by
+another worker, producing two concurrent calls to the external system for the same event.
+Too long and the ~83 events held by a crashed process stay invisible for that whole period
+while new events keep arriving, so the backlog grows.
+
+Graceful shutdown is what keeps this from mattering in the common case: on `SIGTERM` the
+worker stops claiming, finishes what it holds, and releases the leases. The lease covers the
+uncommon case — `SIGKILL`, OOM, power loss.
+
+### 6. At-least-once, with idempotent effects
+
+Exactly-once across our database and a third-party system does not exist. A process can die
+after the external call returns and before the outcome is written; that event will be
+processed again. The design makes re-processing harmless rather than claiming it cannot
+happen: the outcome write is idempotent, and the derived state is a function of the event
+set, not of how many times each event was handled.
+
+## Data model
+
+Single collection, one document per unique event.
+
+```
+{
+  _id,
+  idempotencyKey,   // unique index
+  patientId,
+  type,
+  data,
+  ts,               // clinical time, from the sender
+  receivedAt,       // our clock
+  status,           // pending | processing | processed | failed
+  attempts,
+  nextAttemptAt,    // backoff
+  lockedUntil,      // lease expiry while processing
+  lockedBy,         // worker id, for debugging a stuck event
+  result,           // outcome of the external call
+  lastError         // { message, at } — why it failed, never swallowed
+}
+```
+
+Indexes:
+
+- unique on `idempotencyKey` — the idempotency guarantee
+- `{ status, nextAttemptAt }` — claiming the next pending event
+- `{ status, lockedUntil }` — reclaiming expired leases
+- `{ patientId, ts }` — folding a patient's state
+
+## Still open
+
+- Whether to also serialise processing per patient, with a unique partial index on
+  `{ patientId }` filtered to `status: 'processing'`. Not needed for the correctness of the
+  derived state under decision 4; it would guard against assuming the external system
+  tolerates concurrent calls for the same patient.
+- Retry policy: backoff curve and the attempt count at which an event becomes `failed`.

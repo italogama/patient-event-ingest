@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+
+# real configuration; .env.example is committed
+.env
+.env.local
+
+*.log
+
+# incremental build cache
+*.tsbuildinfo
