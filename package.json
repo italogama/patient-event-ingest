@@ -7,7 +7,9 @@
   "scripts": {
     "build": "nest build",
     "start": "node dist/main.js",
-    "start:dev": "nest start --watch"
+    "start:worker": "node dist/worker.js",
+    "start:dev": "nest start --watch",
+    "start:dev:worker": "nest start --watch --entryFile worker"
   },
   "dependencies": {
     "@nestjs/common": "^12.4.0",

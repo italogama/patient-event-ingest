@@ -40,5 +40,24 @@ services:
     ports:
       - "3000:3000"
 
+  worker:
+    build: .
+    # Same image as the API, different entrypoint. The two are separate
+    # processes so they scale on different signals: the API with incoming
+    # traffic, the worker with the size of the backlog.
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URL: mongodb://mongo:27017/ingest?replicaSet=rs0
+      WORKER_CONCURRENCY: "50"
+    # Docker sends SIGTERM and waits 10s by default. An event takes ~5s and the
+    # worker drains what it holds before exiting, so give it room: killing it
+    # early just leaves leases to expire.
+    stop_grace_period: 30s
+    deploy:
+      replicas: 2
+
 volumes:
   mongo-data:

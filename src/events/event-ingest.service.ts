@@ -5,20 +5,11 @@ import { Model } from 'mongoose';
 import { EventStatus, PatientEvent } from './event.schema';
 import { clientKey, contentKey } from './idempotency-key';
 import { IngestEventDto } from './ingest-event.dto';
+import { isDuplicateKeyError } from './mongo-errors';
 
 export interface IngestResult {
   eventId: string;
   duplicate: boolean;
-}
-
-const DUPLICATE_KEY_ERROR = 11000;
-
-function isDuplicateKeyError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { code?: unknown }).code === DUPLICATE_KEY_ERROR
-  );
 }
 
 @Injectable()
@@ -42,6 +33,8 @@ export class EventIngestService implements OnModuleInit {
       ? clientKey(suppliedKey)
       : contentKey({ patientId: dto.patientId, type: dto.type, ts, data: dto.data });
 
+    const receivedAt = new Date();
+
     try {
       // One round trip, atomic, and it returns the document either way: the one
       // we just inserted, or the one that was already there. A findOne followed
@@ -55,8 +48,16 @@ export class EventIngestService implements OnModuleInit {
             type: dto.type,
             data: dto.data,
             ts,
-            receivedAt: new Date(),
+            receivedAt,
             status: EventStatus.Pending,
+            attempts: 0,
+            // Claimable immediately. The retry backoff moves this forward.
+            nextAttemptAt: receivedAt,
+            lockedUntil: null,
+            lockedBy: null,
+            lockVersion: 0,
+            result: null,
+            lastError: null,
           },
         },
         { upsert: true, returnDocument: 'after', includeResultMetadata: true },
