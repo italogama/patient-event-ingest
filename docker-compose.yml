@@ -1,0 +1,44 @@
+services:
+  mongo:
+    image: mongo:8
+    # --replSet makes mongod a replica set member: it refuses writes until the
+    # set is initiated, and only then does w:majority mean anything.
+    # --bind_ip_all is required because mongod otherwise listens on 127.0.0.1,
+    # which inside a container means "this container only".
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  mongo-init:
+    image: mongo:8
+    depends_on:
+      mongo:
+        condition: service_healthy
+    restart: "no"
+    volumes:
+      - ./docker/rs-init.js:/scripts/rs-init.js:ro
+    command: ["mongosh", "--host", "mongo:27017", "--quiet", "--file", "/scripts/rs-init.js"]
+
+  api:
+    build: .
+    depends_on:
+      # Not just "started": mongod needs seconds to accept connections and the
+      # set needs an elected primary. Without the condition the API boots first
+      # and dies on connect.
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URL: mongodb://mongo:27017/ingest?replicaSet=rs0
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+
+volumes:
+  mongo-data:
