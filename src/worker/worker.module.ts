@@ -6,6 +6,7 @@ import { PatientEvent, PatientEventSchema } from '../events/event.schema';
 import { EventProcessor } from './event-processor';
 import { EventQueue } from './event-queue';
 import { ExternalSystem } from './external-system';
+import { LeaseReaper } from './lease-reaper';
 import { WorkerLoop } from './worker-loop';
 
 @Module({
@@ -13,6 +14,6 @@ import { WorkerLoop } from './worker-loop';
     CoreModule,
     MongooseModule.forFeature([{ name: PatientEvent.name, schema: PatientEventSchema }]),
   ],
-  providers: [EventQueue, ExternalSystem, EventProcessor, WorkerLoop],
+  providers: [EventQueue, ExternalSystem, EventProcessor, LeaseReaper, WorkerLoop],
 })
 export class WorkerModule {}

@@ -100,6 +100,39 @@ processed again. The design makes re-processing harmless rather than claiming it
 happen: the outcome write is idempotent, and the derived state is a function of the event
 set, not of how many times each event was handled.
 
+### 7. One patient at a time, enforced by an index
+
+A unique partial index on `{ patientId }` filtered to `status: 'processing'` allows at most
+one in-flight event per patient. A second concurrent claim for the same patient is refused
+by the server with a duplicate-key error and the worker moves to another candidate.
+
+Why an index rather than a lock table or a list of busy patients: those are extra state that
+can drift from reality when a process dies. The index cannot drift, because it is derived
+from the same documents the workers are claiming.
+
+Strictly speaking this is not required. Under decision 4 the derived state is correct
+whatever order the events were processed in. It is here because the alternative is assuming
+the external system tolerates two concurrent calls for the same patient, which is not
+something we can verify about a third party.
+
+### 8. Expired leases are swept back to pending
+
+A graceful shutdown drains and needs no recovery. The sweep is for the other case: SIGKILL,
+OOM, a node disappearing. A periodic pass moves events whose lease expired back to
+`pending`, or to `failed` once they are out of attempts.
+
+Sweeping rather than reclaiming inside the claim query keeps claiming to one shape: there is
+only ever one kind of claimable work. The sweep interval is derived from the lease rather
+than configured separately.
+
+The sweep counts the lost attempt, even though the worker may have died for an unrelated
+reason such as a deploy. An event that crashes whichever worker picks it up would otherwise
+be retried for ever and take down every replica in turn.
+
+It deliberately does not bump `lockVersion`. If the original worker is in fact alive and
+finishes after the sweep, its write still matches and records the result it really obtained.
+As soon as another worker claims the event the version moves and the latecomer is fenced out.
+
 ## Data model
 
 Single collection, one document per unique event.
@@ -130,10 +163,12 @@ Indexes:
 - `{ status, lockedUntil }` — reclaiming expired leases
 - `{ patientId, ts }` — folding a patient's state
 
-## Still open
+## Still to build
 
-- Whether to also serialise processing per patient, with a unique partial index on
-  `{ patientId }` filtered to `status: 'processing'`. Not needed for the correctness of the
-  derived state under decision 4; it would guard against assuming the external system
-  tolerates concurrent calls for the same patient.
-- Retry policy: backoff curve and the attempt count at which an event becomes `failed`.
+- The fold that turns a patient's processed events into their current state, and a way to
+  read it. Nothing demonstrates the ordering guarantee until this exists.
+- Tests against a real MongoDB for the risky parts: duplicates, ordering, an expired lease
+  being picked up, two workers competing.
+- A load script at 1000 events/min with duplicates and out-of-order arrivals, a chaos script
+  that kills a worker mid-flight, and a stats endpoint that makes "nothing was lost and
+  nothing was counted twice" checkable rather than asserted.
