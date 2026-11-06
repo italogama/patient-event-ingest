@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 
 import { Env, validateEnv } from './config/env';
+import { EventsModule } from './events/events.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -18,6 +19,7 @@ import { HealthController } from './health.controller';
         writeConcern: { w: 'majority', journal: true },
       }),
     }),
+    EventsModule,
   ],
   controllers: [HealthController],
 })
