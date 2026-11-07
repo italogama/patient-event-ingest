@@ -70,6 +70,13 @@ export class PatientEvent {
   @Prop({ required: true })
   lockVersion!: number;
 
+  /**
+   * How many POSTs resolved to this event. Above 1 means senders retried and we
+   * absorbed it; it exists so deduplication can be checked by arithmetic.
+   */
+  @Prop({ required: true })
+  receivedCount!: number;
+
   @Prop({ type: MongooseSchema.Types.Mixed, default: null })
   result!: Record<string, unknown> | null;
 

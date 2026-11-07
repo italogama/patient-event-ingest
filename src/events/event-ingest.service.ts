@@ -42,6 +42,12 @@ export class EventIngestService implements OnModuleInit {
       const result = await this.events.findOneAndUpdate(
         { idempotencyKey },
         {
+          // Counts every POST that resolved to this event, including the
+          // retries we suppressed. $inc rather than $setOnInsert because it has
+          // to apply on the match too: it is what makes "nothing was counted
+          // twice" arithmetic rather than a claim -- posts accepted minus
+          // documents stored is the number of duplicates absorbed.
+          $inc: { receivedCount: 1 },
           $setOnInsert: {
             idempotencyKey,
             patientId: dto.patientId,
@@ -79,7 +85,15 @@ export class EventIngestService implements OnModuleInit {
       // Mongo does not serialise upserts: two concurrent requests for the same
       // key can both match nothing and both attempt the insert. One wins, the
       // other lands here and reads what the winner wrote.
-      const existing = await this.events.findOne({ idempotencyKey }).lean();
+      // Still counted: this POST was a real delivery of the event, and the
+      // insert that lost the race applied nothing.
+      const existing = await this.events
+        .findOneAndUpdate(
+          { idempotencyKey },
+          { $inc: { receivedCount: 1 } },
+          { returnDocument: 'after' },
+        )
+        .lean();
       if (!existing) {
         // A duplicate-key error with no document behind it means the conflict
         // was on a different unique index. Surfacing it is the point.
