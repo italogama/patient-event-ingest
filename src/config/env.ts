@@ -44,6 +44,19 @@ export class Env {
   EXTERNAL_FAILURE_RATE: number = 0;
 }
 
+/**
+ * How much longer than one attempt a lease has to last. A lease shorter than
+ * the call it covers expires while that call is still running, so the sweep
+ * requeues the event, another worker starts a second call, and the first is
+ * fenced out when it returns. The external system then gets one call per
+ * attempt for every event, and nothing reports it but a warning in the log.
+ *
+ * Two is a guard against a typo, not a sizing rule: it still takes a 100%
+ * overshoot to lose a lease. The production rule is that a lease outlasts the
+ * p99 of a whole attempt, which is not a multiple of a configured constant.
+ */
+const MIN_LEASE_FACTOR = 2;
+
 export function validateEnv(raw: Record<string, unknown>): Env {
   const env = plainToInstance(Env, raw, {
     // process.env values are always strings; the numeric settings need converting
@@ -54,12 +67,24 @@ export function validateEnv(raw: Record<string, unknown>): Env {
 
   // whitelist drops everything else in the environment: nothing can read a
   // setting that is not declared above.
-  const errors = validateSync(env, { whitelist: true });
-  if (errors.length > 0) {
-    const details = errors
-      .map((e) => `  ${e.property}: ${Object.values(e.constraints ?? {}).join('; ')}`)
-      .join('\n');
-    throw new Error(`Invalid environment configuration:\n${details}`);
+  const problems = validateSync(env, { whitelist: true }).map(
+    (e) => `  ${e.property}: ${Object.values(e.constraints ?? {}).join('; ')}`,
+  );
+
+  // Only worth checking once both values are known to be numbers; otherwise the
+  // message would compare against a NaN.
+  const minLease = env.EXTERNAL_PROCESSING_MS * MIN_LEASE_FACTOR;
+  if (problems.length === 0 && env.LEASE_MS < minLease) {
+    problems.push(
+      `  LEASE_MS: must be at least ${MIN_LEASE_FACTOR}x EXTERNAL_PROCESSING_MS ` +
+        `(${minLease}), got ${env.LEASE_MS}. A lease that expires while the call it ` +
+        `covers is still running makes every event reach the external system once ` +
+        `per attempt.`,
+    );
+  }
+
+  if (problems.length > 0) {
+    throw new Error(`Invalid environment configuration:\n${problems.join('\n')}`);
   }
 
   return env;

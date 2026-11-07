@@ -366,7 +366,7 @@ of surfacing as a confusing failure later.
 | `MONGO_URL` | none, required | Connection string. The process refuses to start without it. |
 | `PORT` | `3000` | API port. |
 | `WORKER_CONCURRENCY` | `50` | Events one worker process handles at once. |
-| `LEASE_MS` | `30000` | How long a claim stays valid. |
+| `LEASE_MS` | `30000` | How long a claim stays valid. Must be at least 2x `EXTERNAL_PROCESSING_MS`; a lease that expires mid-call sends every event to the external system once per attempt, so the process refuses to start. |
 | `MAX_ATTEMPTS` | `5` | Attempts before an event reaches `failed`. |
 | `EXTERNAL_PROCESSING_MS` | `5000` | The ~5 s the assignment asks us to simulate. |
 | `EXTERNAL_FAILURE_RATE` | `0` | Fraction of external calls that fail, for exercising retries. |
