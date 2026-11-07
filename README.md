@@ -104,6 +104,13 @@ the ceiling is `active patients / 5 s` no matter how many workers run: 1000 even
 at least ~84 concurrently active patients. With 40 patients the service would be capped at
 480/min, and the bottleneck would be the data, not the deployment.
 
+Both scripts check their arithmetic against the whole collection, so they refuse to start on
+a non-empty one. To reset between runs:
+
+```
+docker compose exec mongo mongosh --quiet ingest --eval 'db.events.deleteMany({})'
+```
+
 ```
 node scripts/chaos.mjs
 ```
