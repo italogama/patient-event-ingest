@@ -19,9 +19,8 @@ export class EventProcessor {
       const outcome = await this.queue.recordSuccess(claim, result);
 
       if (outcome === 'lease-lost') {
-        // The external call already happened and cannot be undone. All we can
-        // do is discard our result and say so: another worker owns the event
-        // now, and the duplicated call is the at-least-once cost we accepted.
+        // The external call cannot be undone. Another worker owns the event now,
+        // so the result is discarded; the duplicated call is the accepted cost.
         this.logger.warn(
           `lease lost for ${claim.id.toString()} after a successful call; result discarded`,
         );
@@ -39,8 +38,8 @@ export class EventProcessor {
       const outcome = await this.queue.recordFailure(claim, failure);
 
       if (outcome === 'failed') {
-        // Terminal, and deliberately loud. The event is kept with its last
-        // error so it stays visible and countable instead of disappearing.
+        // Terminal, and deliberately loud. The event is kept with its last error
+        // so it stays countable instead of disappearing.
         this.logger.error(
           `event ${id} failed permanently after ${claim.attempts + 1} attempts: ${failure.message}`,
         );
@@ -50,9 +49,8 @@ export class EventProcessor {
         this.logger.warn(`event ${id} failed, retry scheduled: ${failure.message}`);
       }
     } catch (writeError) {
-      // We could not even record the failure. The lease will expire and the
-      // event will be swept back to pending, so nothing is lost - but this is
-      // a database problem and it has to be visible.
+      // Could not even record the failure. The lease expiry recovers the event,
+      // so nothing is lost, but a database problem has to be visible.
       this.logger.error(
         `could not record failure for ${id}; leaving it to lease expiry`,
         writeError instanceof Error ? writeError.stack : String(writeError),

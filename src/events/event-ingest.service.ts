@@ -42,11 +42,8 @@ export class EventIngestService implements OnModuleInit {
       const result = await this.events.findOneAndUpdate(
         { idempotencyKey },
         {
-          // Counts every POST that resolved to this event, including the
-          // retries we suppressed. $inc rather than $setOnInsert because it has
-          // to apply on the match too: it is what makes "nothing was counted
-          // twice" arithmetic rather than a claim -- posts accepted minus
-          // documents stored is the number of duplicates absorbed.
+          // $inc, not $setOnInsert, because it has to apply on the match too:
+          // this is what makes deduplication checkable by subtraction.
           $inc: { receivedCount: 1 },
           $setOnInsert: {
             idempotencyKey,
@@ -57,7 +54,6 @@ export class EventIngestService implements OnModuleInit {
             receivedAt,
             status: EventStatus.Pending,
             attempts: 0,
-            // Claimable immediately. The retry backoff moves this forward.
             nextAttemptAt: receivedAt,
             lockedUntil: null,
             lockedBy: null,
@@ -82,11 +78,9 @@ export class EventIngestService implements OnModuleInit {
         throw error;
       }
 
-      // Mongo does not serialise upserts: two concurrent requests for the same
-      // key can both match nothing and both attempt the insert. One wins, the
-      // other lands here and reads what the winner wrote.
-      // Still counted: this POST was a real delivery of the event, and the
-      // insert that lost the race applied nothing.
+      // Mongo does not serialise upserts: two concurrent requests for one key
+      // can both match nothing and both insert. The loser lands here and reads
+      // the winner, and still counts, because its insert applied nothing.
       const existing = await this.events
         .findOneAndUpdate(
           { idempotencyKey },

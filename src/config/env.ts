@@ -15,22 +15,13 @@ export class Env {
   @Max(65535)
   PORT: number = 3000;
 
-  /**
-   * Events a single worker process handles at once. The work is waiting on a
-   * slow external call, not CPU, so one process holds many of these cheaply.
-   * It has to be bounded: draining a large backlog without a ceiling would
-   * open thousands of simultaneous calls to the external system.
-   */
+  /** Bounded so draining a backlog cannot open thousands of external calls at once. */
   @IsInt()
   @Min(1)
   @Max(1000)
   WORKER_CONCURRENCY: number = 50;
 
-  /**
-   * How long a claim is valid. Too short and a worker that is merely slow has
-   * its event taken by another worker. Too long and the events held by a
-   * crashed process stay invisible while the backlog grows.
-   */
+  /** Too short steals work from a slow worker; too long hides a dead one's events. */
   @IsInt()
   @Min(1000)
   LEASE_MS: number = 30_000;
@@ -46,10 +37,7 @@ export class Env {
   @Min(0)
   EXTERNAL_PROCESSING_MS: number = 5000;
 
-  /**
-   * Fraction of external calls that fail. Zero by default; the chaos script
-   * raises it, because retry code that is never exercised proves nothing.
-   */
+  /** Fraction of external calls that fail. A knob for exercising the retry path by hand. */
   @IsNumber()
   @Min(0)
   @Max(1)
@@ -58,14 +46,14 @@ export class Env {
 
 export function validateEnv(raw: Record<string, unknown>): Env {
   const env = plainToInstance(Env, raw, {
-    // process.env values are always strings; the numeric settings have to be
-    // converted before they can be validated as numbers.
+    // process.env values are always strings; the numeric settings need converting
+    // before they can be validated as numbers.
     enableImplicitConversion: true,
     exposeDefaultValues: true,
   });
 
-  // whitelist drops every other variable in the environment, so the rest of
-  // the application can only read what is declared above.
+  // whitelist drops everything else in the environment: nothing can read a
+  // setting that is not declared above.
   const errors = validateSync(env, { whitelist: true });
   if (errors.length > 0) {
     const details = errors

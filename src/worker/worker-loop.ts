@@ -21,9 +21,8 @@ const IDLE_MIN_MS = 100;
 const IDLE_MAX_MS = 2000;
 
 /**
- * Pulls events from the collection and keeps a bounded number of them in
- * flight. The work is a slow network call, so holding dozens at once costs one
- * pending promise each, not one thread each.
+ * Keeps a bounded number of events in flight. The work is a slow network call,
+ * so holding dozens costs one pending promise each, not one thread each.
  */
 @Injectable()
 export class WorkerLoop implements OnApplicationBootstrap, OnApplicationShutdown {
@@ -44,9 +43,8 @@ export class WorkerLoop implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   async onApplicationBootstrap(): Promise<void> {
-    // The partial unique index on patientId is what serialises one patient's
-    // events. Claiming before it exists would let two workers handle the same
-    // patient at once, so wait for it the way the API waits for its own index.
+    // Claiming before the partial unique index exists would let two workers
+    // handle the same patient at once.
     await this.events.init();
 
     this.running = true;
@@ -55,10 +53,9 @@ export class WorkerLoop implements OnApplicationBootstrap, OnApplicationShutdown
   }
 
   /**
-   * Stop claiming and let the events already in flight finish. Their leases
-   * stay valid throughout the drain, so nothing is handed to another worker
-   * while this process is still working on it. A SIGKILL skips all of this,
-   * which is exactly what the lease is for.
+   * Stop claiming and let what is in flight finish; the leases stay valid
+   * throughout, so nothing is handed over mid-call. SIGKILL skips all of this,
+   * which is what the lease is for.
    */
   async onApplicationShutdown(signal?: string): Promise<void> {
     if (!this.running) {
@@ -91,8 +88,7 @@ export class WorkerLoop implements OnApplicationBootstrap, OnApplicationShutdown
       });
 
       if (!claim) {
-        // Jittered backoff: a fixed interval would make every replica wake at
-        // the same instant and hit the collection in synchronised bursts.
+        // Jittered: a fixed interval wakes every replica at the same instant.
         await delay(idleMs / 2 + Math.random() * (idleMs / 2));
         idleMs = Math.min(idleMs * 2, IDLE_MAX_MS);
         continue;

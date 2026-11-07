@@ -2,13 +2,11 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 
 /**
- * Request-handling setup, applied by the entrypoint and by the HTTP tests. The
- * validation rules are part of the contract with the senders, so the tests have
- * to exercise the same ones the service runs with.
+ * Applied by the entrypoint and by the HTTP tests: the validation rules are the
+ * contract with the senders, so the tests must exercise the real ones.
  */
 export function configureHttpApp(app: NestExpressApplication): void {
-  // An event payload is small. Accepting unbounded bodies at 1000 req/min is a
-  // memory risk, and anything near Mongo's 16MB document limit is a bug anyway.
+  // An event is small; anything near Mongo's 16MB document limit is a bug.
   app.useBodyParser('json', { limit: '100kb' });
 
   app.useGlobalPipes(

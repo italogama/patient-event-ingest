@@ -14,12 +14,10 @@ export class ExternalSystemError extends Error {
 }
 
 /**
- * Stands in for the slow third-party system. Only the timing is real: the
- * assignment states the processing logic itself is irrelevant.
+ * Stands in for the slow third-party system; only the timing is real.
  *
- * The call is deliberately independent of the patient's current state. That is
- * what makes a late-arriving event cheap: it changes the order the results are
- * folded in, but it does not invalidate the result of any other event.
+ * Deliberately independent of the patient's current state, which is what makes
+ * a late event cheap: it changes the fold order, invalidating no other result.
  */
 @Injectable()
 export class ExternalSystem {

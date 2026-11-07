@@ -18,14 +18,9 @@ export interface ClaimedEvent {
   lockVersion: number;
 }
 
-/** Outcome of writing back a claimed event. */
 export type WriteBack = 'written' | 'retry-scheduled' | 'failed' | 'lease-lost';
 
-/**
- * How many due events a worker looks at per claim round. Reading a batch and
- * then claiming one of them costs one extra query, and in exchange the workers
- * stop all targeting the same document.
- */
+/** Due events looked at per claim round, so workers do not all target one document. */
 const CANDIDATE_BATCH = 20;
 
 const MAX_BACKOFF_MS = 60_000;
@@ -56,19 +51,10 @@ export class EventQueue {
   async claim(workerId: string): Promise<ClaimedEvent | null> {
     const now = new Date();
 
-    // Patients that already have an event in flight. The planner serves this
-    // from the {status, nextAttemptAt} index and fetches each match, so the
-    // cost is bounded by how many events the whole system has in flight —
-    // never by the size of the backlog.
-    //
-    // Excluding them from the candidate query, rather than letting the claim
-    // fail on the index, is what keeps one busy patient from hiding the whole
-    // queue. Candidates are ordered by nextAttemptAt, so a patient with a
-    // large backlog owns every slot in the window: one of its events is in
-    // flight, the rest are refused, and the worker backs off while other
-    // patients' events sit claimable just outside the window. Measured at 200
-    // queued events for one patient, an unrelated event waited for 181 of
-    // them to drain.
+    // Excluded here rather than left to fail on the index. Candidates are
+    // ordered by nextAttemptAt, so one patient with a backlog larger than the
+    // window would own all of it and starve the rest: measured at 200 queued
+    // events, an unrelated event waited for 181 of them to drain.
     const busy = await this.events.distinct('patientId', {
       status: EventStatus.Processing,
     });
@@ -140,8 +126,7 @@ export class EventQueue {
       };
     } catch (error) {
       // The patient became busy between reading the busy set and this update.
-      // Filtering candidates makes this rare, but the index is where the
-      // guarantee actually lives, and this is how it reports a lost race.
+      // Rare, but the index is where the guarantee lives, not the filter.
       if (isDuplicateKeyError(error)) {
         return null;
       }

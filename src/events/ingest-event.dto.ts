@@ -6,10 +6,8 @@ export class IngestEventDto {
   patientId!: string;
 
   /**
-   * Deliberately not restricted to the types the state fold understands.
-   * Rejecting an unknown type with 400 tells a third-party sender the request
-   * was its fault, so it will not retry, and the clinical event is gone. We
-   * store every type and let the fold skip the ones it does not know.
+   * Not restricted to the types the fold understands. A 400 tells a sender the
+   * request was its fault, so it will not retry and the event is gone.
    */
   @IsString()
   @Length(1, 100)

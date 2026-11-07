@@ -6,12 +6,8 @@ import { EventStatus, PatientEvent } from '../events/event.schema';
 import { FoldableEvent, PatientState, foldPatientState } from './patient-state';
 
 /**
- * Events that exist for this patient but are not part of the state yet.
- *
- * Returning the state without this would let it lie by omission: an event that
- * exhausted its attempts is absent from the fold, and a caller would read a
- * complete-looking state with no way to know a reading is missing. "failed" is
- * the number to alert on — those will never be applied without intervention.
+ * Without this the state would lie by omission: an event that exhausted its
+ * attempts is simply absent from the fold. "failed" is the number to alert on.
  */
 export interface NotApplied {
   pending: number;

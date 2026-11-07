@@ -29,16 +29,11 @@ export interface PatientState {
 }
 
 /**
- * Events with the same ts have no clinical order, and that happens for real:
- * two sensors truncating to the second, or a sender stamping a whole batch
- * with one time. Leaving the order to the database makes the fold
- * non-deterministic — the same stored events could produce different vitals on
- * two consecutive reads, because nothing obliges a query plan to return equal
- * keys in a stable order.
- *
- * The tie-break is the idempotency key rather than receivedAt: both are
- * stable, but receivedAt would make the result depend on arrival order, which
- * is the one thing the design promises it never does.
+ * A tied ts has no clinical order, and it happens for real: two sensors
+ * truncating to the second. Leaving the order to the database would make the
+ * fold non-deterministic, since no query plan owes us a stable order for equal
+ * keys. The tie-break is the idempotency key and not receivedAt, which would
+ * make the result depend on arrival order.
  */
 function clinicalOrder(a: FoldableEvent, b: FoldableEvent): number {
   const byTs = a.ts.getTime() - b.ts.getTime();

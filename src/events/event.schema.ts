@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Schema as MongooseSchema } from 'mongoose';
+import { Schema as MongooseSchema } from 'mongoose';
 
 export enum EventStatus {
   Pending = 'pending',
@@ -13,16 +13,10 @@ export interface EventFailure {
   at: Date;
 }
 
-/**
- * The one collection. It is the record of the event, the queue the workers pull
- * from, and the place the processing outcome is written.
- */
+/** The one collection: the event, the queue it waits in, and its outcome. */
 @Schema({ collection: 'events', versionKey: false })
 export class PatientEvent {
-  /**
-   * What makes two requests "the same event". The unique index on this field is
-   * the idempotency guarantee itself, not the application logic around it.
-   */
+  /** What makes two requests the same event. The unique index is the guarantee. */
   @Prop({ required: true, unique: true })
   idempotencyKey!: string;
 
@@ -53,11 +47,11 @@ export class PatientEvent {
   @Prop({ required: true })
   nextAttemptAt!: Date;
 
-  /** Lease expiry. Non-null only while a worker holds the event. */
+  /** Non-null only while a worker holds the event. */
   @Prop({ type: Date, default: null })
   lockedUntil!: Date | null;
 
-  /** Which worker holds it. Not used for correctness; it is for reading logs. */
+  /** Not used for correctness; it is for reading logs. */
   @Prop({ type: String, default: null })
   lockedBy!: string | null;
 
@@ -70,10 +64,7 @@ export class PatientEvent {
   @Prop({ required: true })
   lockVersion!: number;
 
-  /**
-   * How many POSTs resolved to this event. Above 1 means senders retried and we
-   * absorbed it; it exists so deduplication can be checked by arithmetic.
-   */
+  /** POSTs that resolved to this event, so deduplication is checkable by arithmetic. */
   @Prop({ required: true })
   receivedCount!: number;
 
@@ -85,7 +76,6 @@ export class PatientEvent {
   lastError!: EventFailure | null;
 }
 
-export type PatientEventDocument = HydratedDocument<PatientEvent>;
 
 export const PatientEventSchema = SchemaFactory.createForClass(PatientEvent);
 

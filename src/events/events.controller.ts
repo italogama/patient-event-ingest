@@ -8,12 +8,9 @@ export class EventsController {
   constructor(private readonly ingest: EventIngestService) {}
 
   /**
-   * 202, not 201: the event is stored durably but nothing has been processed
-   * yet. The sender does not wait, and must not read processing state here.
-   *
-   * A replay answers 202 with the same body shape and the same eventId as the
-   * first attempt, with duplicate: true. A different status code would make a
-   * sender we do not control treat a successful retry as a failure.
+   * 202, not 201: stored durably, nothing processed yet. A replay answers 202
+   * too, because a different status code would make a sender we do not control
+   * read its own successful retry as a failure.
    */
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
