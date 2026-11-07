@@ -63,6 +63,21 @@ events already applied simply takes its place in the ordering on the next read.
 Trade-off accepted: read cost grows with the number of events per patient. With more time:
 a periodic snapshot per patient, folding only the events after it.
 
+Two details the fold depends on. Events with an identical `ts` have no clinical order,
+which happens for real — two sensors truncating to the second, or a sender stamping a whole
+batch with one time. Leaving their relative order to the database makes the fold
+non-deterministic: nothing obliges a query plan to return equal keys in a stable order, so
+the same stored events could produce different vitals on two consecutive reads. The tie-break
+is `idempotencyKey`, which is derived from content, so it is stable and independent of
+arrival order. `receivedAt` would also be stable, but it would make the result depend on
+arrival order, which is the one thing this design promises it never does.
+
+And the fold covers `processed` events only, because those are the ones carrying the outcome
+of the external call. The response therefore reports how many of that patient's events are
+still `pending` or `processing`, and how many reached `failed`. Without that the state would
+lie by omission: an event that exhausted its attempts is simply absent from the fold, and a
+caller would read a complete-looking state with no way to know a reading is missing.
+
 ### 4. Per-event processing is independent; ordering lives in the fold
 
 The slow external call enriches a single event and does not read the patient's current state.

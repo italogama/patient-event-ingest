@@ -95,3 +95,6 @@ PatientEventSchema.index(
   { patientId: 1 },
   { unique: true, partialFilterExpression: { status: EventStatus.Processing } },
 );
+
+// Reading a patient's state: all of that patient's events, in clinical order.
+PatientEventSchema.index({ patientId: 1, ts: 1 });
