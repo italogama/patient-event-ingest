@@ -26,7 +26,11 @@ export class Env {
   @Min(1000)
   LEASE_MS: number = 30_000;
 
-  /** Attempts before an event reaches the terminal failed state. */
+  /**
+   * Attempts before an event is given up on and moved to failed. Terminal in
+   * practice, with one documented exception: a late write carrying a real
+   * result is still accepted. See README decision 8.
+   */
   @IsInt()
   @Min(1)
   @Max(20)

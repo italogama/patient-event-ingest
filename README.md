@@ -159,7 +159,7 @@ makes a killed process recoverable by any other.
 | 1000 events/min, ~5 s each | ~83 events in flight at steady state (Little's law: `16.67/s x 5 s`). The work is waiting on I/O, not CPU, so a single Node process with bounded concurrency covers it; worker replicas exist for backlog headroom and availability during deploys, not for raw throughput. Concurrency must be capped and configurable — an unbounded drain of a backlog would hit the external system with thousands of simultaneous calls. |
 | Senders time out, retry, resend | Duplicates are the normal case, not the exception. Identity has to be derived from content, and uniqueness enforced by the database, not by a read-then-write in application code. |
 | No ordering guarantee; per-patient state is order-dependent | Arrival order must not influence the result. Ordering is applied by `ts` (clinical time), never by `receivedAt` (our clock). |
-| Never silently lost, never counted twice | The event must be durable before the response is sent. Failures are allowed; silent failures are not — every failure reaches a queryable terminal state with attempt count and last error, and the system must be inspectable enough to assert that nothing is missing. |
+| Never silently lost, never counted twice | The event must be durable before the response is sent. Failures are allowed; silent failures are not — every failure reaches a queryable resting state with attempt count and last error, and the system must be inspectable enough to assert that nothing is missing. |
 | Processes are killed mid-work | In-flight work must be recoverable by another process without human intervention. |
 | Sender needs an immediate answer | No processing in the request path. `POST /events` validates, persists, returns 202. |
 
@@ -293,6 +293,23 @@ be retried for ever and take down every replica in turn.
 It deliberately does not bump `lockVersion`. If the original worker is in fact alive and
 finishes after the sweep, its write still matches and records the result it really obtained.
 As soon as another worker claims the event the version moves and the latecomer is fenced out.
+
+That has a consequence worth stating plainly, because it is the one place this design bends
+its own rules: **`failed` is terminal except when a late write arrives with a real result.**
+A worker whose lease expired on its last permitted attempt can finish successfully after the
+sweep has already moved the event to `failed`, and its write is accepted, taking the event
+from `failed` to `processed`. Reproduced deliberately: the sweep logged
+`0 requeued, 5 moved to failed` and seconds later all five events read as `processed`.
+
+Accepting it is the right call for clinical data. The alternative is to refuse a result the
+external system really did return, and then either lose that reading or pay for the call
+again — for an event we have already given up on. A measurement we hold is worth more than
+the tidiness of a state machine, and the `attempts` count still records every try, so
+nothing is hidden.
+
+Since the lease is now required to be at least twice the call duration, reaching this needs a
+process to stall for longer than a whole extra call on its final attempt. It is the rare case
+it was meant to be, rather than the routine one a short lease used to make it.
 
 ### 9. Busy patients are excluded from the candidate query
 
