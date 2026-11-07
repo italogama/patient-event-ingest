@@ -79,14 +79,14 @@ if (!flag('keep')) {
   // Without a clean slate the arithmetic at the end compares against leftovers.
   const before = await stats();
   if (before.events.total > 0) {
-    console.log(`aviso: a colecao ja tem ${before.events.total} eventos.`);
-    console.log('use --keep para somar a eles, ou limpe antes para a conta fechar.');
+    console.log(`warning: the collection already holds ${before.events.total} events.`);
+    console.log('pass --keep to add to them, or clear the collection so the arithmetic adds up.');
     process.exit(1);
   }
 }
 
-console.log(`enviando ${toSend.length} POSTs (${unique.length} eventos unicos, ` +
-  `${toSend.length - unique.length} duplicatas) a ${RATE}/min sobre ${PATIENTS} pacientes`);
+console.log(`sending ${toSend.length} POSTs (${unique.length} unique events, ` +
+  `${toSend.length - unique.length} resends) at ${RATE}/min across ${PATIENTS} patients`);
 
 const intervalMs = 60_000 / RATE;
 const latencies = [];
@@ -124,20 +124,20 @@ latencies.sort((a, b) => a - b);
 const pct = (p) => latencies[Math.floor((latencies.length - 1) * p)].toFixed(0);
 
 console.log('');
-console.log(`enviados em           ${sendSeconds.toFixed(1)}s ` +
-  `(${(toSend.length / sendSeconds * 60).toFixed(0)}/min efetivos)`);
-console.log(`respostas             ${[...byStatus].map(([k, v]) => `${k}: ${v}`).join(', ')}`);
-console.log(`latencia do POST      p50 ${pct(0.5)}ms  p95 ${pct(0.95)}ms  p99 ${pct(0.99)}ms  max ${pct(1)}ms`);
+console.log(`sent in               ${sendSeconds.toFixed(1)}s ` +
+  `(${(toSend.length / sendSeconds * 60).toFixed(0)}/min effective)`);
+console.log(`responses             ${[...byStatus].map(([k, v]) => `${k}: ${v}`).join(', ')}`);
+console.log(`POST latency          p50 ${pct(0.5)}ms  p95 ${pct(0.95)}ms  p99 ${pct(0.99)}ms  max ${pct(1)}ms`);
 
 console.log('');
-console.log('aguardando o backlog drenar...');
+console.log('waiting for the backlog to drain...');
 let last = null;
 for (;;) {
   const s = await stats();
   const left = s.events.pending + s.events.processing;
   if (left === 0) break;
   if (last === null || Math.abs(last - left) > target / 20) {
-    console.log(`  restam ${left} (processed ${s.events.processed}, in flight ${s.backlog.inFlight})`);
+    console.log(`  ${left} left (processed ${s.events.processed}, in flight ${s.backlog.inFlight})`);
     last = left;
   }
   await sleep(1000);
@@ -152,23 +152,23 @@ const check = (ok, label) => console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`);
 console.log('');
 console.log(JSON.stringify(s, null, 2));
 console.log('');
-console.log(`total decorrido       ${totalSeconds.toFixed(1)}s`);
+console.log(`total elapsed         ${totalSeconds.toFixed(1)}s`);
 // Little's law: at R events/s each taking S seconds, a system keeping up holds
 // R*S of them in flight. A backlog near that number means the service is
 // matching the send rate; one that keeps climbing means it is not.
 const inFlightPrediction = (RATE / 60) * 5;
 const backlog = atSendEnd.events.pending + atSendEnd.events.processing;
-console.log(`backlog no fim do envio ${backlog} ` +
-  `(lei de Little preve ~${inFlightPrediction.toFixed(0)} em voo a ${RATE}/min x 5s)`);
-console.log(`vazao no dreno        ${(drained / drainSeconds * 60).toFixed(0)}/min ` +
-  `(${drained} eventos em ${drainSeconds.toFixed(1)}s; so significativo com backlog grande)`);
-console.log(`teto teorico          ${(Math.min(PATIENTS, 100) / 5 * 60).toFixed(0)}/min ` +
-  `= min(pacientes ativos, slots de worker) / 5s`);
+console.log(`backlog when sending stopped ${backlog} ` +
+  `(Little's law predicts ~${inFlightPrediction.toFixed(0)} in flight at ${RATE}/min x 5s)`);
+console.log(`drain throughput      ${(drained / drainSeconds * 60).toFixed(0)}/min ` +
+  `(${drained} events in ${drainSeconds.toFixed(1)}s; only meaningful with a large backlog)`);
+console.log(`theoretical ceiling   ${(Math.min(PATIENTS, 100) / 5 * 60).toFixed(0)}/min ` +
+  `= min(active patients, worker slots) / 5s`);
 console.log('');
-check(s.ingest.postsAccepted === toSend.length, `todos os ${toSend.length} POSTs contabilizados`);
-check(s.ingest.eventsStored === unique.length, `${unique.length} eventos armazenados, um por evento unico`);
-check(s.ingest.duplicatesSuppressed === toSend.length - unique.length, 'toda duplicata absorvida, nenhuma armazenada');
-check(s.events.processed === unique.length, 'todo evento armazenado foi processado');
-check(s.events.failed === 0, 'nenhum evento em estado de falha');
-check(backlog < inFlightPrediction * 2, `o backlog ficou limitado (${backlog}), nao cresceu sem parar`);
-check(s.ordering.lateArrivals > 0, `chegaram ${s.ordering.lateArrivals} eventos fora de ordem (senao o teste nao prova ordem)`);
+check(s.ingest.postsAccepted === toSend.length, `all ${toSend.length} POSTs accounted for`);
+check(s.ingest.eventsStored === unique.length, `${unique.length} events stored, one per unique event`);
+check(s.ingest.duplicatesSuppressed === toSend.length - unique.length, 'every resend absorbed, none stored twice');
+check(s.events.processed === unique.length, 'every stored event was processed');
+check(s.events.failed === 0, 'no event in a failed state');
+check(backlog < inFlightPrediction * 2, `the backlog stayed bounded at ${backlog} rather than climbing`);
+check(s.ordering.lateArrivals > 0, `${s.ordering.lateArrivals} events arrived out of clinical order (otherwise this proves nothing about ordering)`);

@@ -3,8 +3,143 @@
 Accepts patient events over HTTP, processes each one asynchronously (~5 s, simulated
 external call), and persists the outcome in a single MongoDB collection.
 
-> Draft. This file currently holds the design decisions taken before implementation.
-> Setup and verification instructions are added as the code lands.
+Two processes share one collection: an API that validates and stores events, and a worker
+that processes them. Patient state is derived from the stored events rather than kept as a
+separate document.
+
+## Running it
+
+Docker and Docker Compose are the only requirements.
+
+```
+docker compose up -d --build
+curl localhost:3000/health
+```
+
+That brings up four things:
+
+- **mongo** — MongoDB as a single-node replica set. A replica set rather than a standalone
+  server because the service writes with `w: majority`, which on a standalone mongod is
+  silently meaningless. One node is enough to make it a real code path.
+- **mongo-init** — a one-shot container that runs `rs.initiate()` and waits for a primary.
+  It is idempotent, so restarting the stack does not re-initiate. The API and workers wait
+  for it with `depends_on: service_completed_successfully`, because mongod accepting
+  connections is not the same as the set having elected a primary.
+- **api** — the HTTP entrypoint, on port 3000.
+- **worker** — two replicas, the same image with a different entrypoint. `stop_grace_period`
+  is 30 s: an event takes ~5 s and the worker drains what it holds before exiting, so the
+  10 s Docker default would kill it mid-drain and leave leases to expire.
+
+To run it on the host instead, copy `.env.example` to `.env` and use `npm run start` and
+`npm run start:worker` with just `docker compose up -d mongo mongo-init`. Note the
+`directConnection=true` in the example: `rs.initiate()` records each member under the
+hostname `mongo:27017`, and a driver doing replica set discovery from the host is redirected
+to a name that does not resolve outside the Docker network.
+
+## The API
+
+```
+POST /events
+{ "patientId": "p-1", "type": "vitals", "data": { "heartRate": 60 },
+  "ts": "2026-01-01T10:00:00.000Z" }
+
+202 Accepted
+{ "eventId": "...", "duplicate": false }
+```
+
+`202`, not `201`: the event is stored but not processed, and the sender is told so. A resend
+gets `202` as well, with the same `eventId` and `duplicate: true` — a sender that receives a
+different status code for its own retry has to interpret it, and senders get that wrong.
+An optional `Idempotency-Key` header replaces the content hash as the event's identity.
+
+Fields outside the contract are stripped rather than rejected, and an unrecognised `type` is
+accepted. Both for the same reason: a `400` makes a third-party sender drop the event
+instead of retrying, and a sender adding a new event type should not lose data until we
+deploy. Malformed input — a missing `patientId`, a `ts` that is not a real instant — is a
+`400`.
+
+```
+GET /patients/:patientId/state   the fold, plus how many of that patient's
+                                 events are pending, processing or failed
+GET /stats                       status counts, the ingest arithmetic,
+                                 out-of-order arrivals, retries, backlog
+GET /health                      pings the database, not just the process
+```
+
+## Verifying it
+
+```
+npm install
+npm test
+```
+
+54 tests against the MongoDB the stack is running — `docker compose up -d mongo mongo-init`
+is enough. There is no in-memory substitute, because most of what is under test is the
+database's own behaviour: a unique index refusing concurrent inserts, `findOneAndUpdate`
+being atomic, a partial index serialising claims per patient. A fake would have to
+reimplement exactly the parts most worth testing.
+
+```
+node scripts/load.mjs
+```
+
+Sends 1000 events/min for a minute across 200 patients, with resends and arrival order
+shuffled, then waits for the backlog to drain and checks the arithmetic. A measured run:
+
+```
+posts accepted        1199, every one answered 202
+events stored         1000
+duplicates absorbed   199
+out-of-order arrivals 333, across 178 of the 200 patients
+POST latency          p50 9ms  p95 14ms  p99 16ms  max 19ms
+backlog when sending stopped  78   (Little's law predicts ~83)
+failed                0
+```
+
+The backlog number is the interesting one. 1000/min at ~5 s each means a system keeping up
+holds about 83 events in flight; one that is falling behind shows a backlog that climbs.
+
+`--patients` matters more than it looks. One event per patient is in flight at a time, so
+the ceiling is `active patients / 5 s` no matter how many workers run: 1000 events/min needs
+at least ~84 concurrently active patients. With 40 patients the service would be capped at
+480/min, and the bottleneck would be the data, not the deployment.
+
+```
+node scripts/chaos.mjs
+```
+
+`SIGKILL`s a worker that is holding events and waits for the survivor to recover them,
+without restarting the dead replica. It picks the victim by which worker actually holds the
+most in-flight events: killing whichever container is listed first proves nothing, because
+the replicas race to claim and one can be holding everything while the other has not
+started. A measured run — the killed worker held 16 of the 18 in flight; all 300 events
+reached `processed`, none stuck, none failed, and 24 of them record the lost attempt.
+
+When the victim was holding a large share of the work, the output shows a stretch where the
+remaining count barely moves. That is the lease: the dead worker's events are invisible to
+the survivor until it expires. It is what `LEASE_MS` costs, and the reason that value is a
+trade-off rather than a number to minimise.
+
+## Architecture
+
+```
+POST /events ──> validate ──> upsert on idempotencyKey ──> 202
+                                        │
+                                   events (one collection)
+                                        │
+          claim (findOneAndUpdate, lease + fencing token)
+                                        │
+                        worker ──> external system (~5 s)
+                                        │
+                         write outcome, conditioned on the token
+                                        │
+GET /patients/:id/state <── fold the processed events by ts
+```
+
+The API and the worker are separate processes from the same image, so they scale on
+different signals: the API with incoming traffic, the worker with the size of the backlog.
+Neither holds state of its own; everything that matters is in the collection, which is what
+makes a killed process recoverable by any other.
 
 ## From operating conditions to design
 
@@ -186,6 +321,7 @@ Single collection, one document per unique event.
   data,
   ts,               // clinical time, from the sender
   receivedAt,       // our clock
+  receivedCount,    // POSTs that resolved to this event; above 1 means a sender retried
   status,           // pending | processing | processed | failed
   attempts,
   nextAttemptAt,    // backoff
@@ -208,12 +344,67 @@ Indexes:
 Folding a patient's state will need `{ patientId, ts }`; it is not there yet because
 nothing reads the fold.
 
-## Still to build
+## Configuration
 
-- The fold that turns a patient's processed events into their current state, and a way to
-  read it. Nothing demonstrates the ordering guarantee until this exists.
-- Tests against a real MongoDB for the risky parts: duplicates, ordering, an expired lease
-  being picked up, two workers competing.
-- A load script at 1000 events/min with duplicates and out-of-order arrivals, a chaos script
-  that kills a worker mid-flight, and a stats endpoint that makes "nothing was lost and
-  nothing was counted twice" checkable rather than asserted.
+Validated at boot with `class-validator`, reusing what the DTOs already need rather than
+adding a schema library. A missing or malformed value kills the process at startup instead
+of surfacing as a confusing failure later.
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `MONGO_URL` | none, required | Connection string. The process refuses to start without it. |
+| `PORT` | `3000` | API port. |
+| `WORKER_CONCURRENCY` | `50` | Events one worker process handles at once. |
+| `LEASE_MS` | `30000` | How long a claim stays valid. |
+| `MAX_ATTEMPTS` | `5` | Attempts before an event reaches `failed`. |
+| `EXTERNAL_PROCESSING_MS` | `5000` | The ~5 s the assignment asks us to simulate. |
+| `EXTERNAL_FAILURE_RATE` | `0` | Fraction of external calls that fail, for exercising retries. |
+
+## Limits, and what I would do with more time
+
+**Exactly-once does not exist here.** A worker can die after the external call returns and
+before the outcome is written; that event will be processed again. The design makes
+re-processing harmless instead of claiming it cannot happen. The one case the fencing token
+does not fix is a worker whose lease expired mid-call: its database write is correctly
+refused, but the external system has already been called twice. Fencing protects our data,
+not a third party's.
+
+**Two genuinely distinct events with identical `patientId`, `type`, `ts` and `data` collapse
+into one.** Without an identifier from the sender that is indistinguishable from a retry. No
+design separates them; the `Idempotency-Key` header is the way out for a sender that can
+supply one.
+
+**The claim path is chattier than it needs to be.** Filling 50 slots takes 50 rounds of
+`distinct` + `find` + `findOneAndUpdate`. A batch claim — one `bulkWrite` with
+`ordered: false` marking up to 20 candidates with a shared token, then one `find` to collect
+them — would cut that to three round trips per 20 events. The price is that a worker dying
+leaves 20 leases to expire instead of 1, which is the same trade-off as raising
+`max.poll.records` in a Kafka consumer. At 1000/min the round trips are not worth that.
+
+**Workers poll.** Change streams would remove the idle latency, but not the polling: a
+change stream does not reserve anything, knows nothing about expired leases or scheduled
+retries, and needs a durable resume token to survive a restart. The right use is a wake-up
+hint on top of the existing loop, replacing the adaptive backoff rather than the claim.
+
+**Reading a patient's state is O(events for that patient).** The fix is a periodic snapshot
+per patient, folding only the events after it — kept as a cache that can always be rebuilt
+from the events, not as a second source of truth that can disagree with them.
+
+**The `$nin` that excludes busy patients is a residual filter**, so a very large
+single-patient backlog is scanned past on every claim round. Past roughly 10^5 queued events
+for one patient, that argues for a per-patient queue document, which is the extra state
+decision 7 deliberately avoided. The trade-off reverses with volume.
+
+**`/stats` scans the collection.** The out-of-order count groups every event by patient. It
+is an inspection endpoint for a reviewer, not something to put on a dashboard polling every
+ten seconds.
+
+**Not built, because the assignment excludes it from evaluation:** authentication, any UI,
+real clinical logic, and CI. The fold's event types are deliberately simple — enough to make
+ordering observable, not an attempt at a clinical model.
+
+**The decision to revisit first** is the collection-as-queue. It is right at this volume and
+avoids the dual-write gap a broker would introduce, but at ~10x, or as soon as a second
+consumer needs the same stream, a log with partitioning by `patientId` becomes the better
+answer — and the per-patient ordering this service enforces with an index is the same thing
+a Kafka partition key buys.

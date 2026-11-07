@@ -28,18 +28,18 @@ const docker = (...args) => execFileSync(DOCKER, args, { encoding: 'utf8' }).tri
 
 const before = await stats();
 if (before.events.total > 0) {
-  console.log(`a colecao tem ${before.events.total} eventos; limpe antes para a conta fechar.`);
+  console.log(`the collection holds ${before.events.total} events; clear it so the arithmetic adds up.`);
   process.exit(1);
 }
 
 const workers = docker('compose', 'ps', '-q', 'worker').split('\n').filter(Boolean);
 if (workers.length < 2) {
-  console.log(`precisa de 2 replicas de worker, encontrei ${workers.length}.`);
-  console.log('rode: docker compose up -d --scale worker=2 worker');
+  console.log(`needs 2 worker replicas, found ${workers.length}.`);
+  console.log('run: docker compose up -d --scale worker=2 worker');
   process.exit(1);
 }
 
-console.log(`enviando ${EVENTS} eventos sobre ${PATIENTS} pacientes`);
+console.log(`sending ${EVENTS} events across ${PATIENTS} patients`);
 const posts = [];
 for (let i = 0; i < EVENTS; i++) {
   posts.push(
@@ -57,14 +57,14 @@ for (let i = 0; i < EVENTS; i++) {
 }
 const responses = await Promise.all(posts);
 const accepted = responses.filter((r) => r.status === 202).length;
-console.log(`aceitos ${accepted}/${EVENTS}`);
+console.log(`accepted ${accepted}/${EVENTS}`);
 
 // Both replicas have to be holding work before the kill. Killing whichever
 // container happens to be listed first proves nothing: the replicas race to
 // claim, and one can easily have taken everything while the other had not
 // started, in which case the victim dies holding nothing and no recovery is
 // exercised at all.
-console.log('aguardando as duas replicas segurarem trabalho...');
+console.log('waiting until both replicas are holding work...');
 let atKill;
 let victimWorkerId;
 for (;;) {
@@ -85,22 +85,22 @@ for (;;) {
 const victimHost = victimWorkerId.split(':')[0];
 const victim = workers.find((id) => id.startsWith(victimHost));
 if (!victim) {
-  console.log(`nao achei o container de ${victimWorkerId}`);
+  console.log(`no container found for ${victimWorkerId}`);
   process.exit(1);
 }
 
 const holding = atKill.backlog.inFlightByWorker[victimWorkerId];
 docker('kill', '--signal=SIGKILL', victim);
 console.log('');
-console.log(`SIGKILL em ${victimWorkerId}, que segurava ${holding} eventos`);
-console.log(`distribuicao no instante da morte: ${JSON.stringify(atKill.backlog.inFlightByWorker)}`);
-console.log('os eventos dele ficam invisiveis para o sobrevivente ate o lease vencer.');
+console.log(`SIGKILL to ${victimWorkerId}, which was holding ${holding} events`);
+console.log(`distribution at the moment of death: ${JSON.stringify(atKill.backlog.inFlightByWorker)}`);
+console.log('its events are invisible to the survivor until the lease expires.');
 
 // Deliberately not restarted: the surviving replica has to recover the dead
 // one's work on its own, which is what happens when a node disappears and the
 // scheduler has not replaced it yet.
 console.log('');
-console.log('aguardando o dreno sem reiniciar o worker morto...');
+console.log('waiting for the drain, without restarting the dead worker...');
 const startedWaiting = Date.now();
 let reported = 0;
 for (;;) {
@@ -110,18 +110,18 @@ for (;;) {
   const elapsed = Math.floor((Date.now() - startedWaiting) / 1000);
   if (elapsed >= reported + 10) {
     reported = elapsed;
-    console.log(`  ${elapsed}s: restam ${left} (processed ${s.events.processed}, ` +
+    console.log(`  ${elapsed}s: ${left} left (processed ${s.events.processed}, ` +
       `in flight ${s.backlog.inFlight})`);
   }
   if (elapsed > 300) {
-    console.log('TIMEOUT: o backlog nao drenou em 5 minutos');
+    console.log('TIMEOUT: the backlog did not drain within 5 minutes');
     break;
   }
   await sleep(1000);
 }
 
 docker('compose', 'up', '-d', 'worker');
-console.log('replica reiniciada');
+console.log('replica restarted');
 
 const s = await stats();
 const check = (ok, label) => console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`);
@@ -129,13 +129,13 @@ const check = (ok, label) => console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}`);
 console.log('');
 console.log(JSON.stringify(s, null, 2));
 console.log('');
-check(s.events.total === EVENTS, `os ${EVENTS} eventos continuam no banco`);
-check(s.events.processed === EVENTS, 'todos chegaram a processed, apesar do SIGKILL');
-check(s.events.processing === 0 && s.events.pending === 0, 'nenhum ficou preso');
-check(s.events.failed === 0, 'nenhum virou falha por causa da morte do worker');
+check(s.events.total === EVENTS, `all ${EVENTS} events are still stored`);
+check(s.events.processed === EVENTS, 'every one reached processed, despite the SIGKILL');
+check(s.events.processing === 0 && s.events.pending === 0, 'none left stuck in pending or processing');
+check(s.events.failed === 0, 'none turned into a failure because a worker died');
 check(
   s.retries.eventsWithMoreThanOneAttempt >= holding,
-  `os ${holding} eventos do worker morto foram retomados ` +
-    `(${s.retries.eventsWithMoreThanOneAttempt} com mais de uma tentativa; ` +
-    'a tentativa perdida fica contada, nao escondida)',
+  `the dead worker's ${holding} events were picked up again ` +
+    `(${s.retries.eventsWithMoreThanOneAttempt} with more than one attempt; ` +
+    'the lost attempt is counted, not hidden)',
 );

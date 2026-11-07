@@ -4,7 +4,7 @@ import { Types } from 'mongoose';
 
 import { EventStatus } from '../src/events/event.schema';
 import { EventProcessor } from '../src/worker/event-processor';
-import { ClaimedEvent, EventQueue } from '../src/worker/event-queue';
+import { EventQueue } from '../src/worker/event-queue';
 import { ExternalSystem } from '../src/worker/external-system';
 import { LeaseReaper } from '../src/worker/lease-reaper';
 import { MongoContext, createMongoContext } from './mongo-fixture';
@@ -273,7 +273,7 @@ describe('worker', () => {
       // throw here would take down the worker loop and with it every other
       // event in flight.
       await ctx.events.deleteOne({ _id: claim.id });
-      await processor.process(claim satisfies ClaimedEvent);
+      await processor.process(claim);
     });
 
     it('retries a failing event up to MAX_ATTEMPTS and then gives up', async () => {
