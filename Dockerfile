@@ -2,7 +2,9 @@ FROM node:26-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
-COPY tsconfig.json nest-cli.json ./
+# tsconfig.build.json is what `nest build` picks up by default; without it the
+# image would compile with different settings from a local build.
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src ./src
 RUN npm run build
 

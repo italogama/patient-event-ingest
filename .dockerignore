@@ -1,5 +1,8 @@
 node_modules
 dist
+dist-test
+test
+scripts
 .git
 .env
 *.log
