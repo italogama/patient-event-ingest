@@ -77,11 +77,11 @@ Needs Node 22.12 or newer on the host. NestJS 12 ships ESM only, and the compile
 `require()` it, which is stable from 22.12. The service itself does not care: it runs on
 `node:26-alpine` in the image.
 
-54 tests against the MongoDB the stack is running — `docker compose up -d mongo mongo-init`
-is enough. There is no in-memory substitute, because most of what is under test is the
-database's own behaviour: a unique index refusing concurrent inserts, `findOneAndUpdate`
-being atomic, a partial index serialising claims per patient. A fake would have to
-reimplement exactly the parts most worth testing.
+The suite runs against the MongoDB the stack is running — `docker compose up -d mongo
+mongo-init` is enough. There is no in-memory substitute, because most of what is under
+test is the database's own behaviour: a unique index refusing concurrent inserts,
+`findOneAndUpdate` being atomic, a partial index serialising claims per patient. A fake
+would have to reimplement exactly the parts most worth testing.
 
 ```
 node scripts/load.mjs
