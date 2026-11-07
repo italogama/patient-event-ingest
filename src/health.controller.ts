@@ -15,7 +15,15 @@ export class HealthController {
 
     // connection.readyState is only the last state the driver observed. A ping
     // proves the server still answers, which is what the health check is for.
-    await db.admin().command({ ping: 1 });
+    try {
+      await db.admin().command({ ping: 1 });
+    } catch (error) {
+      // A dependency being unreachable is a 503. Letting this through would
+      // surface it as a 500, which says the fault is ours.
+      throw new ServiceUnavailableException(
+        `mongo did not answer: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
 
     return { status: 'ok' };
   }
