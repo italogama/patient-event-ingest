@@ -1,4 +1,4 @@
-# Ingest Service
+# Patient Event Ingest
 
 Accepts patient events over HTTP, processes each one asynchronously (~5 s, simulated
 external call), and persists the outcome in a single MongoDB collection.

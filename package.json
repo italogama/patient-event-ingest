@@ -1,5 +1,5 @@
 {
-  "name": "ingest-service",
+  "name": "patient-event-ingest",
   "version": "0.1.0",
   "private": true,
   "description": "Ingests patient events over HTTP and processes them asynchronously",
