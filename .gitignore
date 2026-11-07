@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-test/
 coverage/
 
 # real configuration; .env.example is committed

@@ -9,7 +9,9 @@
     "start": "node dist/main.js",
     "start:worker": "node dist/worker.js",
     "start:dev": "nest start --watch",
-    "start:dev:worker": "nest start --watch --entryFile worker"
+    "start:dev:worker": "nest start --watch --entryFile worker",
+    "test": "tsc -p tsconfig.spec.json && node --test dist-test/test/",
+    "typecheck": "tsc --noEmit -p tsconfig.spec.json"
   },
   "dependencies": {
     "@nestjs/common": "^12.4.0",
@@ -26,6 +28,7 @@
   "devDependencies": {
     "@nestjs/cli": "^12.0.12",
     "@nestjs/schematics": "^12.0.13",
+    "@nestjs/testing": "^12.4.0",
     "@types/node": "^26.6.6",
     "typescript": "^6.0.3"
   }
