@@ -133,6 +133,31 @@ It deliberately does not bump `lockVersion`. If the original worker is in fact a
 finishes after the sweep, its write still matches and records the result it really obtained.
 As soon as another worker claims the event the version moves and the latecomer is fenced out.
 
+### 9. Busy patients are excluded from the candidate query
+
+The claim query filters out patients that already have an event in flight, rather than
+reading the oldest due events and letting the partial index refuse the ones whose patient is
+busy.
+
+Relying on the refusal alone is a head-of-line block. Candidates are ordered by
+`nextAttemptAt`, so a patient with a backlog larger than the candidate window owns every
+slot in it: one of its events is in flight, the rest are refused, `claim` returns nothing and
+the worker backs off — while other patients' events sit due and claimable just outside the
+window. Measured with 200 queued events for one patient and a single event for another, the
+unrelated event waited for 181 of the 200 to drain, and the system ran at a concurrency of 1
+with 100 slots free. At the 5 s per event this service simulates, that is a ~22 minute wait
+with no error logged anywhere.
+
+The cost is one extra read per claim round. It is bounded by how many events the whole system
+has in flight, never by the size of the backlog. The duplicate-key path stays: a patient can
+become busy between that read and the claim, and the index is still where the guarantee
+lives.
+
+With more time: the exclusion is a `$nin`, which the index applies as a residual filter, so a
+very large single-patient backlog is scanned past on every round. Past roughly 10^5 queued
+events for one patient that argues for a per-patient queue document — the extra state
+decision 7 deliberately avoided. The trade-off reverses with volume.
+
 ## Data model
 
 Single collection, one document per unique event.
@@ -151,6 +176,7 @@ Single collection, one document per unique event.
   nextAttemptAt,    // backoff
   lockedUntil,      // lease expiry while processing
   lockedBy,         // worker id, for debugging a stuck event
+  lockVersion,      // fencing token: bumped on every claim, checked on write-back
   result,           // outcome of the external call
   lastError         // { message, at } — why it failed, never swallowed
 }
@@ -161,7 +187,11 @@ Indexes:
 - unique on `idempotencyKey` — the idempotency guarantee
 - `{ status, nextAttemptAt }` — claiming the next pending event
 - `{ status, lockedUntil }` — reclaiming expired leases
-- `{ patientId, ts }` — folding a patient's state
+- unique on `{ patientId }`, partial on `status: 'processing'` — at most one in-flight
+  event per patient, and the set of busy patients the claim query excludes
+
+Folding a patient's state will need `{ patientId, ts }`; it is not there yet because
+nothing reads the fold.
 
 ## Still to build
 

@@ -56,8 +56,29 @@ export class EventQueue {
   async claim(workerId: string): Promise<ClaimedEvent | null> {
     const now = new Date();
 
+    // Patients that already have an event in flight. The planner serves this
+    // from the {status, nextAttemptAt} index and fetches each match, so the
+    // cost is bounded by how many events the whole system has in flight —
+    // never by the size of the backlog.
+    //
+    // Excluding them from the candidate query, rather than letting the claim
+    // fail on the index, is what keeps one busy patient from hiding the whole
+    // queue. Candidates are ordered by nextAttemptAt, so a patient with a
+    // large backlog owns every slot in the window: one of its events is in
+    // flight, the rest are refused, and the worker backs off while other
+    // patients' events sit claimable just outside the window. Measured at 200
+    // queued events for one patient, an unrelated event waited for 181 of
+    // them to drain.
+    const busy = await this.events.distinct('patientId', {
+      status: EventStatus.Processing,
+    });
+
     const candidates = await this.events
-      .find({ status: EventStatus.Pending, nextAttemptAt: { $lte: now } })
+      .find({
+        status: EventStatus.Pending,
+        nextAttemptAt: { $lte: now },
+        patientId: { $nin: busy },
+      })
       .sort({ nextAttemptAt: 1 })
       .limit(CANDIDATE_BATCH)
       .select({ _id: 1 })
@@ -118,8 +139,9 @@ export class EventQueue {
         lockVersion: doc.lockVersion,
       };
     } catch (error) {
-      // The partial unique index refuses a second in-flight event for the same
-      // patient. That is the serialisation working, not a failure: move on.
+      // The patient became busy between reading the busy set and this update.
+      // Filtering candidates makes this rare, but the index is where the
+      // guarantee actually lives, and this is how it reports a lost race.
       if (isDuplicateKeyError(error)) {
         return null;
       }
